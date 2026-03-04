@@ -1,4 +1,5 @@
 import re
+import csv
 import socket
 import ssl
 import requests
@@ -209,8 +210,17 @@ class DomainMonitor:
             logger.error("No domain file found.")
             return
 
-        with open(self.config['DOMAIN_FILE'], 'r') as f:
-            valid_domains = [d.strip() for d in f if d.strip() and self._is_valid(d.strip())]
+        valid_domains = []
+        try:
+            with open(self.config['DOMAIN_FILE'], 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    domain = row.get('domain', '').strip()
+                    if domain and self._is_valid(domain):
+                        valid_domains.append(domain)
+        except Exception as e:
+            logger.error(f"Error reading domain file: {e}")
+            return
 
         if not valid_domains:
             logger.error("No valid domains to check.")
