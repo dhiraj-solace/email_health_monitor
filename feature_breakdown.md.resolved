@@ -1,0 +1,35 @@
+# Feature-by-Feature Breakdown
+
+Here is a one-by-one look at everything the **Domain & Email Health Monitor** does:
+
+### 1. DNS A Record Check
+- **What it does**: Verifies your domain resolves to a valid IP address.
+- **Why it matters**: Ensures your website is reachable by browsers and other services.
+
+### 2. HTTP Status Check
+- **What it does**: Pings your website URL and expects a "200 OK" response.
+- **Why it matters**: Confirms that your web server is running and serving content correctly.
+
+### 3. SSL Certificate Monitoring
+- **What it does**: Checks your SSL certificate for validity and tracks its expiry date.
+- **Why it matters**: Prevents "Your connection is not private" errors for users by alerting you before the certificate expires.
+
+### 4. MX Record Verification
+- **What it does**: Confirms that your domain has Mail Exchange records configured.
+- **Why it matters**: Essential for receiving emails; without correct MX records, emails sent to you will bounce.
+
+### 5. SPF Record Check
+- **What it does**: Checks for a Sender Policy Framework (SPF) record in your DNS.
+- **Why it matters**: Prevents others from spoofing your domain and improves email deliverability to services like Gmail.
+
+### 6. DMARC Policy Verification
+- **What it does**: Scans for a Domain-based Message Authentication, Reporting, and Conformance (DMARC) record.
+- **Why it matters**: Provides instructions to receivers on how to handle emails that fail SPF/DKIM, protecting your brand reputation.
+
+### 7. PTR (Reverse DNS) Check
+- **What it does**: Verifies the Reverse DNS (PTR) record for your mail server's IP address.
+- **Why it matters**: Many email filters block messages from IPs without a valid PTR record.
+
+### 8. Automated Email Alerting
+- **What it does**: Automatically sends an HTML/plain-text report to a designated email address if any check fails.
+- **Why it matters**: Provides hands-free monitoring so you are immediately notified of infrastructure or configuration issues.
