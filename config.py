@@ -1,0 +1,66 @@
+import os
+import logging
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+CONFIG = {
+    'EMAIL_FROM': os.getenv('EMAIL_FROM'),
+    'EMAIL_TO': os.getenv('EMAIL_TO'),
+    'APP_PASSWORD': os.getenv('APP_PASSWORD'),
+    'SSL_WARNING_DAYS': int(os.getenv('SSL_WARNING_DAYS', 15)),
+    'ENABLE_EMAIL_ALERTS': os.getenv('ENABLE_EMAIL_ALERTS', 'True').lower() == 'true',
+    'VERBOSE': os.getenv('VERBOSE', 'True').lower() == 'true',
+    'DOMAIN_FILE': os.getenv('DOMAIN_FILE', 'domains.txt'),
+    'CHECK_IP': os.getenv('CHECK_IP'),
+    'MAX_WORKERS': int(os.getenv('MAX_WORKERS', 10))
+}
+
+BLACKLIST_DATABASES = {
+    'BARRACUDA': 'b.barracudacentral.org',
+    'SPAMHAUS_ZEN': 'zen.spamhaus.org',
+    'SPAMHAUS_SBL': 'sbl.spamhaus.org',
+    'SPAMHAUS_CSS': 'css.spamhaus.org',
+    'SPAMHAUS_PBL': 'pbl.spamhaus.org',
+    'SORBS_SMTP': 'smtp.dnsbl.sorbs.net',
+    'SORBS_HTTP': 'http.dnsbl.sorbs.net',
+    'SORBS_MISC': 'misc.dnsbl.sorbs.net',
+    'UCEPROTECT': 'dnsbl.uceprotect.net',
+    'DNSWL': 'list.dnswl.org',
+    'SENDERSCORE': 'bl.senderscore.net',
+    'PSBL': 'psbl.surriel.com',
+    'AHBL': 'ahbl.org',
+    'MAILSPIKE': 'bl.mailspike.net',
+    'LASHBACK': 'blacklist.lashback.com',
+    'SPAMCOP': 'bl.spamcop.net',
+    'CBL': 'cbl.abuseat.org',
+    'MANITU': 'ix.dnsbl.manitu.net',
+    'SPAMRATS': 'spam.spamrats.com',
+    'SEM_FRESH': 'fresh.spameatingmonkey.net',
+    'ABUSE_RO': 'dnsbl.abuse.ro',
+    'BLOCKLIST_DE': 'bl.blocklist.de',
+    'ZAPBL': 'dnsbl.zapbl.net',
+    'UCEPROTECT_1': 'dnsbl-1.uceprotect.net'
+}
+
+def validate_config():
+    """Verify all required configuration parameters are present."""
+    required = ['EMAIL_FROM', 'EMAIL_TO']
+    if CONFIG['ENABLE_EMAIL_ALERTS']:
+        required.append('APP_PASSWORD')
+    
+    missing = [field for field in required if not CONFIG.get(field)]
+    
+    if missing:
+        logger.error(f"CRITICAL - Missing required environment variables: {', '.join(missing)}")
+        print(f"\n[!] ERROR: Missing configuration in .env: {', '.join(missing)}")
+        return False
+        
+    if not os.path.exists(CONFIG['DOMAIN_FILE']):
+        logger.error(f"CRITICAL - Domain file not found: {CONFIG['DOMAIN_FILE']}")
+        print(f"\n[!] ERROR: Domain file '{CONFIG['DOMAIN_FILE']}' not found.")
+        return False
+        
+    return True
