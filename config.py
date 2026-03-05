@@ -18,7 +18,7 @@ CONFIG = {
     'MAX_WORKERS': int(os.getenv('MAX_WORKERS', 10))
 }
 
-BLACKLIST_DATABASES = {
+BLACKLIST_IP = {
     'BARRACUDA': 'b.barracudacentral.org',
     'SPAMHAUS_ZEN': 'zen.spamhaus.org',
     'SPAMHAUS_SBL': 'sbl.spamhaus.org',
@@ -43,6 +43,17 @@ BLACKLIST_DATABASES = {
     'BLOCKLIST_DE': 'bl.blocklist.de',
     'ZAPBL': 'dnsbl.zapbl.net',
     'UCEPROTECT_1': 'dnsbl-1.uceprotect.net'
+}
+
+BLACKLIST_DOMAIN = {
+    'SPAMHAUS_DBL': 'dbl.spamhaus.org',
+    'SURBL_MULTI': 'multi.surbl.org',
+    'URIBL_BLACK': 'black.uribl.com'
+}
+
+BLACKLIST_EMAIL = {
+    'URIBL_BLACK': 'black.uribl.com',
+    'DBL_SPAMHAUS': 'dbl.spamhaus.org'
 }
 
 def validate_config():

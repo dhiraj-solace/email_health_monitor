@@ -18,7 +18,7 @@ import dns.resolver
 import dns.exception
 
 # Import configuration from config.py
-from config import CONFIG, BLACKLIST_DATABASES, validate_config
+from config import CONFIG, BLACKLIST_IP, BLACKLIST_DOMAIN, BLACKLIST_EMAIL, validate_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -155,25 +155,32 @@ class EmailInfrastructureCheck:
         return self.results
 
 class BlacklistCheck:
-    def __init__(self, ip: str):
-        self.ip = ip
+    def __init__(self, ip: str, domain: str):
+        self.ip, self.domain = ip, domain
 
-    def _query(self, name: str, host: str) -> Tuple[str, str]:
-        rev = '.'.join(reversed(self.ip.split('.')))
+    def _query(self, target: str, host: str, is_ip: bool) -> Tuple[str, str]:
+        prefix = '.'.join(reversed(target.split('.'))) if is_ip else target
         try:
-            dns.resolver.resolve(f"{rev}.{host}", 'A')
-            return name, "LISTED" if 'dnswl' not in host.lower() else "WHITELISTED"
+            dns.resolver.resolve(f"{prefix}.{host}", 'A')
+            return host, "LISTED"
         except:
-            return name, "CLEAN"
+            return host, "CLEAN"
+
+    def run_category(self, target: str, databases: Dict[str, str], is_ip: bool) -> Dict[str, Any]:
+        detected = []
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            futures = [ex.submit(self._query, target, h, is_ip) for h in databases.values()]
+            for f in as_completed(futures):
+                host, status = f.result()
+                if status == "LISTED": detected.append(host)
+        return {'listed': bool(detected), 'detected': detected}
 
     def run_all(self) -> Dict[str, Any]:
-        detected = []
-        with ThreadPoolExecutor(max_workers=10) as ex:
-            futures = [ex.submit(self._query, n, h) for n, h in BLACKLIST_DATABASES.items()]
-            for f in as_completed(futures):
-                name, status = f.result()
-                if status == "LISTED": detected.append(name)
-        return {'listed': bool(detected), 'detected': detected, 'ip': self.ip}
+        return {
+            'ip': self.run_category(self.ip, BLACKLIST_IP, True),
+            'domain': self.run_category(self.domain, BLACKLIST_DOMAIN, False),
+            'email': self.run_category(self.domain, BLACKLIST_EMAIL, False)
+        }
 
 class DomainMonitor:
     def __init__(self, config: Dict[str, Any]):
@@ -202,7 +209,8 @@ class DomainMonitor:
             if check_type in ['all', 'email']:
                 res['email'] = EmailInfrastructureCheck(domain, ip).run_all()
             if check_type in ['all', 'blacklist']:
-                res['blacklist'] = BlacklistCheck(ip).run_all()
+                res['blacklist'] = BlacklistCheck(ip, domain).run_all()
+                res['blacklist']['ip_address'] = ip
         return domain, res
 
     def run(self, check_type: str = 'all'):
@@ -250,8 +258,11 @@ class DomainMonitor:
             print(f"{d:30} | {status:7} | {perf:6} | {ssl_days:10} | {ip}")
             
             bl = data.get('blacklist', {})
-            if bl.get('listed'):
-                print(f"  [!] BLACKLISTED on: {', '.join(bl['detected'])} (IP: {bl['ip']})")
+            if bl:
+                for cat in ['ip', 'domain', 'email']:
+                    c = bl.get(cat, {})
+                    if c.get('listed'):
+                        print(f"  [!] {cat.upper()} BLACKLISTED: {', '.join(c['detected'])}")
 
     def _send_email(self, results: Dict[str, Any]):
         if not self.config['APP_PASSWORD']: return
@@ -272,46 +283,72 @@ class DomainMonitor:
                 </tr>
         """
         
+        def add_row(label, status, details, fail):
+            color = "color: red;" if fail else ""
+            return f"<tr style='{color}'><td>{label}</td><td>{status}</td><td>{details}</td></tr>"
+
+        issue_domains, healthy_domains = [], []
         for d, data in results.items():
-            web = data.get('website', {})
-            mail = data.get('email', {})
+            has_fail = False
+            for cat in ['website', 'email']:
+                for check in data.get(cat, {}).values():
+                    if isinstance(check, dict) and not check.get('status', True): has_fail = True
             bl = data.get('blacklist', {})
+            if bl.get('ip', {}).get('listed') or bl.get('domain', {}).get('listed') or bl.get('email', {}).get('listed'):
+                has_fail = True
             
-            html += f"<tr style='background-color: #e9ecef;'><td colspan='3'><b>{d}</b></td></tr>"
-            
-            dns_ip = web.get('dns', {}).get('details', 'N/A')
-            html += f"<tr><td>DNS IP</td><td>{'OK' if web.get('dns', {}).get('status') else 'FAIL'}</td><td>{dns_ip}</td></tr>"
-            
-            http = web.get('http', {})
-            html += f"<tr><td>HTTP Status</td><td>{'OK' if http.get('status') else 'FAIL'}</td><td>{http.get('code', 'N/A')} (Response: {http.get('time', 'N/A')}s)</td></tr>"
-            
-            ssl_info = web.get('ssl', {})
-            html += f"<tr><td>SSL Certificate</td><td>{'OK' if ssl_info.get('status') else 'FAIL'}</td><td>Remaining: {ssl_info.get('details', 'N/A')} (Expires: {ssl_info.get('expiry', 'N/A')})</td></tr>"
-            
-            sec = http.get('security', {})
-            if sec:
-                sec_list = [h for h, present in sec.items() if present]
-                sec_missing = [h for h, present in sec.items() if not present]
-                html += f"<tr><td>Security Headers</td><td>{'PASS' if not sec_missing else 'WARN'}</td><td>Found: {', '.join(sec_list) if sec_list else 'None'}<br>Missing: {', '.join(sec_missing) if sec_missing else 'None'}</td></tr>"
+            if has_fail: issue_domains.append((d, data))
+            else: healthy_domains.append(d)
 
-            if mail:
-                mx = mail.get('mx', {})
-                html += f"<tr><td>MX Records</td><td>{'OK' if mx.get('status') else 'FAIL'}</td><td>{mx.get('details', 'N/A')}</td></tr>"
-                
-                spf = mail.get('spf', {})
-                html += f"<tr><td>SPF Record</td><td>{'OK' if spf.get('status') else 'FAIL'}</td><td>{spf.get('details', 'N/A')}</td></tr>"
-                
-                dmarc = mail.get('dmarc', {})
-                html += f"<tr><td>DMARC Record</td><td>{'OK' if dmarc.get('status') else 'FAIL'}</td><td>{dmarc.get('details', 'N/A')}</td></tr>"
-                
-                ptr = mail.get('ptr', {})
-                html += f"<tr><td>PTR (Reverse DNS)</td><td>{'OK' if ptr.get('status') else 'FAIL'}</td><td>{ptr.get('details', 'N/A')}</td></tr>"
+        html = f"""
+        <html>
+        <body style='font-family: sans-serif; color: #333;'>
+            <div style='background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #dee2e6;'>
+                <h2 style='margin-top: 0;'>Domain Health Summary</h2>
+                <p>Checked: <b>{len(results)}</b> | Issues: <span style='color: {"red" if issue_domains else "green"}; font-weight: bold;'>{len(issue_domains)}</span> | Healthy: <b>{len(healthy_domains)}</b></p>
+                {f"<p style='color: red;'><b>Action Required:</b> Please review the {len(issue_domains)} domains with issues below.</p>" if issue_domains else "<p style='color: green;'>All domains are healthy!</p>"}
+            </div>
+        """
 
-            if bl:
-                bl_details = f"IP: {bl['ip']}<br>Listed on: " + (", ".join(bl['detected']) if bl['detected'] else "None")
-                html += f"<tr><td>Blacklist Status</td><td>{'FAIL' if bl.get('listed') else 'OK'}</td><td>{bl_details}</td></tr>"
+        if issue_domains:
+            html += "<h3>Domains with Issues</h3>"
+            for d, data in issue_domains:
+                web, mail, bl = data.get('website', {}), data.get('email', {}), data.get('blacklist', {})
+                html += f"<table border='1' cellpadding='8' style='border-collapse: collapse; width: 100%; margin-bottom: 20px;'>"
+                html += f"<tr style='background-color: #e9ecef;'><td colspan='3'><b>{d}</b></td></tr>"
+                
+                dns = web.get('dns', {})
+                html += add_row("DNS IP", "YES" if dns.get('status') else "NO", dns.get('details', 'N/A'), not dns.get('status'))
+                
+                http = web.get('http', {})
+                html += add_row("HTTP Status", "YES" if http.get('status') else "NO", f"{http.get('code', 'N/A')} (Response: {http.get('time', 'N/A')}s)", not http.get('status'))
+                
+                ssl = web.get('ssl', {})
+                html += add_row("SSL Certificate", "YES" if ssl.get('status') else "NO", f"Remaining: {ssl.get('details', 'N/A')} (Expires: {ssl.get('expiry', 'N/A')})", not ssl.get('status'))
+                
+                sec = http.get('security', {})
+                if sec:
+                    miss = [h for h, p in sec.items() if not p]
+                    html += add_row("Security Headers", "PASS" if not miss else "WARN", f"Found: {', '.join(h for h, p in sec.items() if p) or 'None'}<br>Missing: {', '.join(miss) or 'None'}", bool(miss))
 
-        html += "</table><p style='color: grey; font-size: 0.8em;'>This is an automated report.</p></body></html>"
+                if mail:
+                    for label, key in [("MX Records", "mx"), ("SPF Record", "spf"), ("DMARC Record", "dmarc"), ("PTR (Reverse DNS)", "ptr")]:
+                        m = mail.get(key, {})
+                        html += add_row(label, "YES" if m.get('status') else "NO", m.get('details', 'N/A'), not m.get('status'))
+
+                if bl:
+                    for label, info in [("Is IP Blacklisted", bl.get('ip', {})), ("Is Domain Blacklisted", bl.get('domain', {})), ("Is Email Blacklisted", bl.get('email', {}))]:
+                        is_bl = info.get('listed')
+                        details = ("Listed on: " + ", ".join(info.get('detected', []))) if is_bl else "Clean"
+                        if "IP" in label: details += f" (IP: {bl.get('ip_address', 'N/A')})"
+                        html += add_row(label, "YES" if is_bl else "NO", details, is_bl)
+                html += "</table>"
+
+        if healthy_domains:
+            html += "<h3>Healthy Domains</h3>"
+            html += f"<p style='color: green;'>{', '.join(healthy_domains)}</p>"
+
+        html += "<p style='color: grey; font-size: 0.8em; margin-top: 30px;'>Report generated on: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + "</p></body></html>"
         msg.attach(MIMEText(html, 'html'))
         
         try:
