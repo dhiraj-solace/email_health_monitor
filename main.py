@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formatdate, make_msgid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any, Optional
 import dns.resolver
@@ -262,14 +263,21 @@ class DomainMonitor:
                 for cat in ['ip', 'domain', 'email']:
                     c = bl.get(cat, {})
                     if c.get('listed'):
-                        print(f"  [!] {cat.upper()} BLACKLISTED: {', '.join(c['detected'])}")
+                        print(f"  [!] {cat.upper()} LISTED: {', '.join(c['detected'])}")
 
     def _send_email(self, results: Dict[str, Any]):
         if not self.config['APP_PASSWORD']: return
         msg = MIMEMultipart('alternative')
         msg['Subject'] = f"Domain Health Report - {datetime.now().strftime('%Y-%m-%d')}"
-        msg['From'] = self.config['EMAIL_FROM']
-        msg['To'] = ", ".join(self.config['EMAIL_TO'])
+        msg['From'] = f"Email Health Monitor <{self.config['EMAIL_FROM']}>"
+        
+        recipients = [r.strip() for r in str(self.config['EMAIL_TO']).split(',') if r.strip()]
+        msg['To'] = ", ".join(recipients)
+        
+        msg['Date'] = formatdate(localtime=True)
+        msg['Message-ID'] = make_msgid()
+        msg['MIME-Version'] = '1.0'
+        msg['X-Mailer'] = 'Python-Email-Health-Monitor'
         
         html = f"""
         <html>
@@ -308,6 +316,7 @@ class DomainMonitor:
                 <h2 style='margin-top: 0;'>Domain Health Summary</h2>
                 <p>Checked: <b>{len(results)}</b> | Issues: <span style='color: {"red" if issue_domains else "green"}; font-weight: bold;'>{len(issue_domains)}</span> | Healthy: <b>{len(healthy_domains)}</b></p>
                 {f"<p style='color: red;'><b>Action Required:</b> Please review the {len(issue_domains)} domains with issues below.</p>" if issue_domains else "<p style='color: green;'>All domains are healthy!</p>"}
+                <p style='margin-top: 15px;'><b>Need help?</b> <a href='https://drive.google.com/file/d/1eIGXutbVxOULDnwBBLKfUlvOhI9k0Zly/view?usp=sharing' style='background: #007bff; color: white; padding: 10px 15px; text-decoration: none; border-radius: 4px; font-weight: bold; display: inline-block;'>View Troubleshooting Guide (PDF)</a></p>
             </div>
         """
 
@@ -338,7 +347,7 @@ class DomainMonitor:
                         html += add_row(label, "YES" if m.get('status') else "NO", m.get('details', 'N/A'), not m.get('status'))
 
                 if bl:
-                    for label, info in [("Is IP Blacklisted", bl.get('ip', {})), ("Is Domain Blacklisted", bl.get('domain', {})), ("Is Email Blacklisted", bl.get('email', {}))]:
+                    for label, info in [("IP Reputation", bl.get('ip', {})), ("Domain Reputation", bl.get('domain', {})), ("Email Reputation", bl.get('email', {}))]:
                         is_bl = info.get('listed')
                         details = ("Listed on: " + ", ".join(info.get('detected', []))) if is_bl else "Clean"
                         if "IP" in label: details += f" (IP: {bl.get('ip_address', 'N/A')})"
@@ -349,8 +358,21 @@ class DomainMonitor:
             html += "<h3>Healthy Domains</h3>"
             html += f"<p style='color: green;'>{', '.join(healthy_domains)}</p>"
 
-        html += f"<div style='margin-top: 20px; padding: 15px; background: #fff5f5; border: 1px solid #feb2b2; border-radius: 6px;'><p style='margin: 0;'><b>Need help?</b> Refer to our <a href='{self.config['TROUBLESHOOTING_URL']}'>Troubleshooting Guide</a> to resolve any issues.</p></div>"
         html += "<p style='color: grey; font-size: 0.8em; margin-top: 30px;'>Report generated on: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + "</p></body></html>"
+        text = f"Domain Health Monitoring Report\nGenerated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        text += f"Summary: Checked: {len(results)} | Issues: {len(issue_domains)} | Healthy: {len(healthy_domains)}\n\n"
+        
+        if issue_domains:
+            text += "Domains with Issues:\n"
+            for d, _ in issue_domains:
+                text += f"- {d}\n"
+            text += "\nPlease refer to the HTML version for full details."
+        else:
+            text += "All domains are healthy!"
+
+        text += "\n\nNeed help understanding these terms or solving issues?\nView the Troubleshooting Guide: https://drive.google.com/file/d/1eIGXutbVxOULDnwBBLKfUlvOhI9k0Zly/view?usp=sharing"
+
+        msg.attach(MIMEText(text, 'plain'))
         msg.attach(MIMEText(html, 'html'))
         
         try:
