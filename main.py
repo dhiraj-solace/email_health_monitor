@@ -268,7 +268,8 @@ class DomainMonitor:
         if not self.config['APP_PASSWORD']: return
         msg = MIMEMultipart('alternative')
         msg['Subject'] = f"Domain Health Report - {datetime.now().strftime('%Y-%m-%d')}"
-        msg['From'], msg['To'] = self.config['EMAIL_FROM'], self.config['EMAIL_TO']
+        msg['From'] = self.config['EMAIL_FROM']
+        msg['To'] = ", ".join(self.config['EMAIL_TO'])
         
         html = f"""
         <html>
@@ -348,6 +349,7 @@ class DomainMonitor:
             html += "<h3>Healthy Domains</h3>"
             html += f"<p style='color: green;'>{', '.join(healthy_domains)}</p>"
 
+        html += f"<div style='margin-top: 20px; padding: 15px; background: #fff5f5; border: 1px solid #feb2b2; border-radius: 6px;'><p style='margin: 0;'><b>Need help?</b> Refer to our <a href='{self.config['TROUBLESHOOTING_URL']}'>Troubleshooting Guide</a> to resolve any issues.</p></div>"
         html += "<p style='color: grey; font-size: 0.8em; margin-top: 30px;'>Report generated on: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + "</p></body></html>"
         msg.attach(MIMEText(html, 'html'))
         

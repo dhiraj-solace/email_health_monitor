@@ -8,14 +8,15 @@ logger = logging.getLogger(__name__)
 
 CONFIG = {
     'EMAIL_FROM': os.getenv('EMAIL_FROM'),
-    'EMAIL_TO': os.getenv('EMAIL_TO'),
+    'EMAIL_TO': [e.strip() for e in os.getenv('EMAIL_TO', '').split(',') if e.strip()],
     'APP_PASSWORD': os.getenv('APP_PASSWORD'),
     'SSL_WARNING_DAYS': int(os.getenv('SSL_WARNING_DAYS', 15)),
     'ENABLE_EMAIL_ALERTS': os.getenv('ENABLE_EMAIL_ALERTS', 'True').lower() == 'true',
     'VERBOSE': os.getenv('VERBOSE', 'True').lower() == 'true',
     'DOMAIN_FILE': os.getenv('DOMAIN_FILE', 'domains.csv'),
     'CHECK_IP': os.getenv('CHECK_IP'),
-    'MAX_WORKERS': int(os.getenv('MAX_WORKERS', 10))
+    'MAX_WORKERS': int(os.getenv('MAX_WORKERS', 10)),
+    'TROUBLESHOOTING_URL': 'https://drive.google.com/file/d/1eIGXutbVxOULDnwBBLKfUlvOhI9k0Zly/view?usp=sharing'
 }
 
 BLACKLIST_IP = {
