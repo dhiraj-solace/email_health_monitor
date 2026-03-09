@@ -12,7 +12,10 @@ import time
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 from email.utils import formatdate, make_msgid
+from io import BytesIO
+from xhtml2pdf import pisa
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any, Optional
 import dns.resolver
@@ -101,6 +104,11 @@ class WebsiteHealthCheck:
 
 def domain_to_log(domain: str) -> str:
     return domain
+
+def convert_html_to_pdf(html_content: str) -> Optional[bytes]:
+    result = BytesIO()
+    pdf = pisa.pisaDocument(BytesIO(html_content.encode("utf-8")), result)
+    return result.getvalue() if not pdf.err else None
 
 class EmailInfrastructureCheck:
     def __init__(self, domain: str, ip: str):
@@ -359,21 +367,33 @@ class DomainMonitor:
             html += f"<p style='color: green;'>{', '.join(healthy_domains)}</p>"
 
         html += "<p style='color: grey; font-size: 0.8em; margin-top: 30px;'>Report generated on: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + "</p></body></html>"
-        text = f"Domain Health Monitoring Report\nGenerated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        text += f"Summary: Checked: {len(results)} | Issues: {len(issue_domains)} | Healthy: {len(healthy_domains)}\n\n"
         
-        if issue_domains:
-            text += "Domains with Issues:\n"
-            for d, _ in issue_domains:
-                text += f"- {d}\n"
-            text += "\nPlease refer to the HTML version for full details."
-        else:
-            text += "All domains are healthy!"
-
-        text += "\n\nNeed help understanding these terms or solving issues?\nView the Troubleshooting Guide: https://drive.google.com/file/d/1eIGXutbVxOULDnwBBLKfUlvOhI9k0Zly/view?usp=sharing"
+        pdf_data = convert_html_to_pdf(html)
+        
+        # Simplified email body
+        email_body = f"""
+        <html>
+        <body style='font-family: sans-serif; color: #333;'>
+            <div style='background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #dee2e6;'>
+                <h2 style='margin-top: 0;'>Domain Health Summary</h2>
+                <p>Checked: <b>{len(results)}</b> | Issues: <span style='color: {"red" if issue_domains else "green"}; font-weight: bold;'>{len(issue_domains)}</span> | Healthy: <b>{len(healthy_domains)}</b></p>
+                <p>Please find the detailed health report attached as a PDF.</p>
+                <p style='margin-top: 15px;'><b>Need help?</b> <a href='https://drive.google.com/file/d/1eIGXutbVxOULDnwBBLKfUlvOhI9k0Zly/view?usp=sharing' style='background: #007bff; color: white; padding: 10px 15px; text-decoration: none; border-radius: 4px; font-weight: bold; display: inline-block;'>View Troubleshooting Guide (PDF)</a></p>
+            </div>
+            <p style='color: grey; font-size: 0.8em;'>Report generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        </body>
+        </html>
+        """
+        
+        text = f"Domain Health Monitoring Report Summary\nChecked: {len(results)} | Issues: {len(issue_domains)} | Healthy: {len(healthy_domains)}\n\nPlease see the attached PDF for full details.\n\nTroubleshooting Guide: https://drive.google.com/file/d/1eIGXutbVxOULDnwBBLKfUlvOhI9k0Zly/view?usp=sharing"
 
         msg.attach(MIMEText(text, 'plain'))
-        msg.attach(MIMEText(html, 'html'))
+        msg.attach(MIMEText(email_body, 'html'))
+        
+        if pdf_data:
+            part = MIMEApplication(pdf_data, Name="Domain_Health_Report.pdf")
+            part['Content-Disposition'] = 'attachment; filename="Domain_Health_Report.pdf"'
+            msg.attach(part)
         
         try:
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
