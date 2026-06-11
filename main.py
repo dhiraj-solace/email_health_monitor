@@ -20,7 +20,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any, Optional
 import dns.resolver
 import dns.exception
-
 # Import configuration from config.py
 from config import CONFIG, BLACKLIST_IP, BLACKLIST_DOMAIN, BLACKLIST_EMAIL, validate_config
 
@@ -195,6 +194,50 @@ class DomainMonitor:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
 
+    def _spam_risk_label(self, data: Dict[str, Any]) -> Tuple[str, str]:
+        mail = data.get('email', {})
+        bl = data.get('blacklist', {})
+        score = 0
+        reasons = []
+
+        if bl.get('ip', {}).get('listed'):
+            score += 50
+            reasons.append("IP is blacklisted")
+        if bl.get('domain', {}).get('listed'):
+            score += 45
+            reasons.append("Domain is blacklisted")
+
+        mx = mail.get('mx', {})
+        spf = mail.get('spf', {})
+        dmarc = mail.get('dmarc', {})
+        ptr = mail.get('ptr', {})
+
+        if mail:
+            if not mx.get('status'):
+                score += 30
+                reasons.append("mail server records missing")
+            if not spf.get('status'):
+                score += 30
+                reasons.append("SPF missing")
+            if not dmarc.get('status'):
+                score += 30
+                reasons.append("DMARC missing")
+            elif "p=none" in str(dmarc.get('details', '')).lower():
+                score += 15
+                reasons.append("DMARC is monitoring only")
+            if not ptr.get('status'):
+                score += 20
+                reasons.append("reverse DNS missing")
+        else:
+            score += 20
+            reasons.append("email checks not available")
+
+        if score >= 50:
+            return "High", "; ".join(reasons) or "Major email reputation issue found"
+        if score >= 15:
+            return "Medium", "; ".join(reasons) or "Some email trust signals need review"
+        return "Low", "Core email reputation checks look clean"
+
     def _is_valid(self, domain: str) -> bool:
         return bool(re.match(r"^[a-zA-Z0-9][-a-zA-Z0-9.]{0,253}[a-zA-Z0-9]\.[a-zA-Z]{2,63}$", domain))
 
@@ -299,7 +342,7 @@ class DomainMonitor:
                     <th>Details</th>
                 </tr>
         """
-        
+
         def add_row(label, status, details, fail):
             color = "color: red;" if fail else ""
             return f"<tr style='{color}'><td>{label}</td><td>{status}</td><td>{details}</td></tr>"
@@ -332,8 +375,11 @@ class DomainMonitor:
             html += "<h3>Domains with Issues</h3>"
             for d, data in issue_domains:
                 web, mail, bl = data.get('website', {}), data.get('email', {}), data.get('blacklist', {})
+                spam_risk, spam_reason = self._spam_risk_label(data)
+                risk_color = {"Low": "green", "Medium": "#b36b00", "High": "red"}.get(spam_risk, "#333")
                 html += f"<table border='1' cellpadding='8' style='border-collapse: collapse; width: 100%; margin-bottom: 20px;'>"
                 html += f"<tr style='background-color: #e9ecef;'><td colspan='3'><b>{d}</b></td></tr>"
+                html += f"<tr><td><b>Spam Risk</b></td><td><b style='color: {risk_color};'>{spam_risk}</b></td><td>{spam_reason}</td></tr>"
                 
                 dns = web.get('dns', {})
                 html += add_row("DNS IP", "YES" if dns.get('status') else "NO", dns.get('details', 'N/A'), not dns.get('status'))
@@ -355,7 +401,7 @@ class DomainMonitor:
                         html += add_row(label, "YES" if m.get('status') else "NO", m.get('details', 'N/A'), not m.get('status'))
 
                 if bl:
-                    for label, info in [("IP Reputation", bl.get('ip', {})), ("Domain Reputation", bl.get('domain', {})), ("Email Reputation", bl.get('email', {}))]:
+                    for label, info in [("IP Blacklisted", bl.get('ip', {})), ("Domain Blacklisted", bl.get('domain', {})), ("Email Blacklisted", bl.get('email', {}))]:
                         is_bl = info.get('listed')
                         details = ("Listed on: " + ", ".join(info.get('detected', []))) if is_bl else "Clean"
                         if "IP" in label: details += f" (IP: {bl.get('ip_address', 'N/A')})"
@@ -364,7 +410,13 @@ class DomainMonitor:
 
         if healthy_domains:
             html += "<h3>Healthy Domains</h3>"
-            html += f"<p style='color: green;'>{', '.join(healthy_domains)}</p>"
+            html += "<table border='1' cellpadding='8' style='border-collapse: collapse; width: 100%; margin-bottom: 20px;'>"
+            html += "<tr style='background-color: #e9ecef;'><th>Domain</th><th>Spam Risk</th><th>Reason</th></tr>"
+            for d in healthy_domains:
+                spam_risk, spam_reason = self._spam_risk_label(results[d])
+                risk_color = {"Low": "green", "Medium": "#b36b00", "High": "red"}.get(spam_risk, "#333")
+                html += f"<tr><td>{d}</td><td><b style='color: {risk_color};'>{spam_risk}</b></td><td>{spam_reason}</td></tr>"
+            html += "</table>"
 
         html += "<p style='color: grey; font-size: 0.8em; margin-top: 30px;'>Report generated on: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + "</p></body></html>"
         
@@ -411,7 +463,7 @@ def main():
     # Validate before running
     if not validate_config():
         sys.exit(1)
-        
+
     DomainMonitor(CONFIG).run(args.type)
 
 if __name__ == "__main__":
