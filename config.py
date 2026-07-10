@@ -15,7 +15,12 @@ CONFIG = {
     'VERBOSE': os.getenv('VERBOSE', 'True').lower() == 'true',
     'DOMAIN_FILE': os.getenv('DOMAIN_FILE', 'domains.csv'),
     'CHECK_IP': os.getenv('CHECK_IP'),
-    'MAX_WORKERS': int(os.getenv('MAX_WORKERS', 10))
+    'MAX_WORKERS': int(os.getenv('MAX_WORKERS', 10)),
+    'DKIM_SELECTORS': [
+        selector.strip()
+        for selector in os.getenv('DKIM_SELECTORS', 'selector1,selector2,google,default,hostingermail1,hostingermail2').split(',')
+        if selector.strip()
+    ]
 }
 
 BLACKLIST_IP = {

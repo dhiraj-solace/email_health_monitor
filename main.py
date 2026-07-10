@@ -110,9 +110,19 @@ def convert_html_to_pdf(html_content: str) -> Optional[bytes]:
     return result.getvalue() if not pdf.err else None
 
 class EmailInfrastructureCheck:
-    def __init__(self, domain: str, ip: str):
+    def __init__(self, domain: str, ip: Optional[str] = None, dkim_selectors: Optional[List[str]] = None):
         self.domain, self.ip = domain, ip
+        self.dkim_selectors = dkim_selectors or []
         self.results: Dict[str, Any] = {}
+
+    def _txt_values(self, records) -> List[str]:
+        values = []
+        for record in records:
+            if hasattr(record, 'strings'):
+                values.append(''.join(part.decode('utf-8', errors='ignore') for part in record.strings))
+            else:
+                values.append(str(record).replace('" "', '').strip('"'))
+        return values
 
     def check_mx(self) -> bool:
         try:
@@ -127,7 +137,7 @@ class EmailInfrastructureCheck:
     def check_spf(self) -> bool:
         try:
             records = dns.resolver.resolve(self.domain, 'TXT')
-            spf = next((str(r).strip('"') for r in records if 'v=spf1' in str(r)), None)
+            spf = next((r for r in self._txt_values(records) if r.lower().startswith('v=spf1')), None)
             self.results['spf'] = {'status': bool(spf), 'details': spf or "No SPF"}
             return bool(spf)
         except Exception as e:
@@ -137,14 +147,47 @@ class EmailInfrastructureCheck:
     def check_dmarc(self) -> bool:
         try:
             records = dns.resolver.resolve(f"_dmarc.{self.domain}", 'TXT')
-            dmarc = next((str(r).strip('"') for r in records if 'v=DMARC1' in str(r)), None)
+            dmarc = next((r for r in self._txt_values(records) if r.lower().startswith('v=dmarc1')), None)
             self.results['dmarc'] = {'status': bool(dmarc), 'details': dmarc or "No DMARC"}
             return bool(dmarc)
         except Exception as e:
             self.results['dmarc'] = {'status': False, 'details': str(e)}
             return False
 
+    def check_dkim(self) -> bool:
+        if not self.dkim_selectors:
+            self.results['dkim'] = {'status': False, 'details': "No DKIM selectors configured"}
+            return False
+
+        checked = []
+        for selector in self.dkim_selectors:
+            name = f"{selector}._domainkey.{self.domain}"
+            checked.append(name)
+            try:
+                records = dns.resolver.resolve(name, 'TXT')
+                dkim = next((r for r in self._txt_values(records) if 'p=' in r.lower()), None)
+                if dkim:
+                    self.results['dkim'] = {'status': True, 'details': f"{selector}: {dkim}"}
+                    return True
+            except Exception:
+                pass
+
+            try:
+                records = dns.resolver.resolve(name, 'CNAME')
+                targets = [str(r.target).rstrip('.') for r in records]
+                if targets:
+                    self.results['dkim'] = {'status': True, 'details': f"{selector}: CNAME -> {', '.join(targets)}"}
+                    return True
+            except Exception:
+                pass
+
+        self.results['dkim'] = {'status': False, 'details': "No DKIM found for: " + ", ".join(checked)}
+        return False
+
     def check_ptr(self) -> bool:
+        if not self.ip:
+            self.results['ptr'] = {'status': True, 'skipped': True, 'details': "Skipped - no mail/sending IP found"}
+            return True
         try:
             rev = '.'.join(reversed(self.ip.split('.'))) + '.in-addr.arpa'
             records = dns.resolver.resolve(rev, 'PTR')
@@ -159,6 +202,7 @@ class EmailInfrastructureCheck:
         self.check_mx()
         self.check_spf()
         self.check_dmarc()
+        self.check_dkim()
         self.check_ptr()
         return self.results
 
@@ -201,15 +245,16 @@ class DomainMonitor:
         reasons = []
 
         if bl.get('ip', {}).get('listed'):
-            score += 50
+            score += 40
             reasons.append("IP is blacklisted")
         if bl.get('domain', {}).get('listed'):
-            score += 45
+            score += 40
             reasons.append("Domain is blacklisted")
 
         mx = mail.get('mx', {})
         spf = mail.get('spf', {})
         dmarc = mail.get('dmarc', {})
+        dkim = mail.get('dkim', {})
         ptr = mail.get('ptr', {})
 
         if mail:
@@ -225,16 +270,19 @@ class DomainMonitor:
             elif "p=none" in str(dmarc.get('details', '')).lower():
                 score += 15
                 reasons.append("DMARC is monitoring only")
-            if not ptr.get('status'):
+            if not dkim.get('status'):
+                score += 30
+                reasons.append("DKIM missing")
+            if not ptr.get('status') and not ptr.get('skipped'):
                 score += 20
                 reasons.append("reverse DNS missing")
         else:
             score += 20
             reasons.append("email checks not available")
 
-        if score >= 50:
+        if score >= 60:
             return "High", "; ".join(reasons) or "Major email reputation issue found"
-        if score >= 15:
+        if score >= 30:
             return "Medium", "; ".join(reasons) or "Some email trust signals need review"
         return "Low", "Core email reputation checks look clean"
 
@@ -257,12 +305,11 @@ class DomainMonitor:
             res['website'] = WebsiteHealthCheck(domain, self.config['SSL_WARNING_DAYS']).run_all()
         
         ip = self.config.get('CHECK_IP') or self._discover_ip(domain)
-        if ip:
-            if check_type in ['all', 'email']:
-                res['email'] = EmailInfrastructureCheck(domain, ip).run_all()
-            if check_type in ['all', 'blacklist']:
-                res['blacklist'] = BlacklistCheck(ip, domain).run_all()
-                res['blacklist']['ip_address'] = ip
+        if check_type in ['all', 'email']:
+            res['email'] = EmailInfrastructureCheck(domain, ip, self.config.get('DKIM_SELECTORS', [])).run_all()
+        if ip and check_type in ['all', 'blacklist']:
+            res['blacklist'] = BlacklistCheck(ip, domain).run_all()
+            res['blacklist']['ip_address'] = ip
         return domain, res
 
     def run(self, check_type: str = 'all'):
@@ -376,7 +423,7 @@ class DomainMonitor:
             for d, data in issue_domains:
                 web, mail, bl = data.get('website', {}), data.get('email', {}), data.get('blacklist', {})
                 spam_risk, spam_reason = self._spam_risk_label(data)
-                risk_color = {"Low": "green", "Medium": "#b36b00", "High": "red"}.get(spam_risk, "#333")
+                risk_color = {"Low": "green", "Medium": "#b36b00", "High": "red", "Not Checked": "#6c757d"}.get(spam_risk, "#333")
                 html += f"<table border='1' cellpadding='8' style='border-collapse: collapse; width: 100%; margin-bottom: 20px;'>"
                 html += f"<tr style='background-color: #e9ecef;'><td colspan='3'><b>{d}</b></td></tr>"
                 html += f"<tr><td><b>Spam Risk</b></td><td><b style='color: {risk_color};'>{spam_risk}</b></td><td>{spam_reason}</td></tr>"
@@ -396,9 +443,10 @@ class DomainMonitor:
                     html += add_row("Security Headers", "PASS" if not miss else "WARN", f"Found: {', '.join(h for h, p in sec.items() if p) or 'None'}<br>Missing: {', '.join(miss) or 'None'}", bool(miss))
 
                 if mail:
-                    for label, key in [("MX Records", "mx"), ("SPF Record", "spf"), ("DMARC Record", "dmarc"), ("PTR (Reverse DNS)", "ptr")]:
+                    for label, key in [("MX Records", "mx"), ("SPF Record", "spf"), ("DMARC Record", "dmarc"), ("DKIM Record", "dkim"), ("PTR (Reverse DNS)", "ptr")]:
                         m = mail.get(key, {})
-                        html += add_row(label, "YES" if m.get('status') else "NO", m.get('details', 'N/A'), not m.get('status'))
+                        status = "SKIP" if m.get('skipped') else ("YES" if m.get('status') else "NO")
+                        html += add_row(label, status, m.get('details', 'N/A'), not m.get('status') and not m.get('skipped'))
 
                 if bl:
                     for label, info in [("IP Blacklisted", bl.get('ip', {})), ("Domain Blacklisted", bl.get('domain', {})), ("Email Blacklisted", bl.get('email', {}))]:
@@ -414,7 +462,7 @@ class DomainMonitor:
             html += "<tr style='background-color: #e9ecef;'><th>Domain</th><th>Spam Risk</th><th>Reason</th></tr>"
             for d in healthy_domains:
                 spam_risk, spam_reason = self._spam_risk_label(results[d])
-                risk_color = {"Low": "green", "Medium": "#b36b00", "High": "red"}.get(spam_risk, "#333")
+                risk_color = {"Low": "green", "Medium": "#b36b00", "High": "red", "Not Checked": "#6c757d"}.get(spam_risk, "#333")
                 html += f"<tr><td>{d}</td><td><b style='color: {risk_color};'>{spam_risk}</b></td><td>{spam_reason}</td></tr>"
             html += "</table>"
 
