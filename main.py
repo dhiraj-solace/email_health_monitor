@@ -255,7 +255,6 @@ class DomainMonitor:
         spf = mail.get('spf', {})
         dmarc = mail.get('dmarc', {})
         dkim = mail.get('dkim', {})
-        ptr = mail.get('ptr', {})
 
         if mail:
             if not mx.get('status'):
@@ -273,9 +272,6 @@ class DomainMonitor:
             if not dkim.get('status'):
                 score += 30
                 reasons.append("DKIM missing")
-            if not ptr.get('status') and not ptr.get('skipped'):
-                score += 20
-                reasons.append("reverse DNS missing")
         else:
             score += 20
             reasons.append("email checks not available")
@@ -398,7 +394,9 @@ class DomainMonitor:
         for d, data in results.items():
             has_fail = False
             for cat in ['website', 'email']:
-                for check in data.get(cat, {}).values():
+                for key, check in data.get(cat, {}).items():
+                    if cat == 'email' and key == 'ptr':
+                        continue
                     if isinstance(check, dict) and not check.get('status', True): has_fail = True
             bl = data.get('blacklist', {})
             if bl.get('ip', {}).get('listed') or bl.get('domain', {}).get('listed') or bl.get('email', {}).get('listed'):
@@ -445,8 +443,8 @@ class DomainMonitor:
                 if mail:
                     for label, key in [("MX Records", "mx"), ("SPF Record", "spf"), ("DMARC Record", "dmarc"), ("DKIM Record", "dkim"), ("PTR (Reverse DNS)", "ptr")]:
                         m = mail.get(key, {})
-                        status = "SKIP" if m.get('skipped') else ("YES" if m.get('status') else "NO")
-                        html += add_row(label, status, m.get('details', 'N/A'), not m.get('status') and not m.get('skipped'))
+                        status = "SKIP" if m.get('skipped') else ("INFO" if key == "ptr" else ("YES" if m.get('status') else "NO"))
+                        html += add_row(label, status, m.get('details', 'N/A'), key != "ptr" and not m.get('status') and not m.get('skipped'))
 
                 if bl:
                     for label, info in [("IP Blacklisted", bl.get('ip', {})), ("Domain Blacklisted", bl.get('domain', {})), ("Email Blacklisted", bl.get('email', {}))]:

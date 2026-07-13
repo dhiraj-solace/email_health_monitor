@@ -24,14 +24,23 @@ import dns.exception
 # ── Hardcoded Configuration ────────────────────────────────────────────────
 CONFIG = {
     "EMAIL_FROM":          "emailmonitoringalert@gmail.com",
-    "EMAIL_TO":            "joey@fundmatellc.com,manny@fundmatellc.com, dhirajrajputsolace@gmail.com",
+    "EMAIL_TO":            "joey@fundmatellc.com,manny@fundmatellc.com, rihasoft2@gmail.com",
     "APP_PASSWORD":        "jrcr uvor mnyd kyrq",
     "ENABLE_EMAIL_ALERTS": True,
     "SSL_WARNING_DAYS":    15,
     "DOMAIN_FILE":         "domains.csv",
     "CHECK_IP":            None,
     "MAX_WORKERS":         10,
-    "DKIM_SELECTORS":      ["selector1", "selector2", "google", "default"],
+    "DKIM_SELECTORS":      [
+        "selector1",
+        "selector2",
+        "google",
+        "default",
+        "hostingermail1",
+        "hostingermail2",
+        "hostingermail-a",
+        "hostingermail-b",
+    ],
     "VERBOSE":             True,
     # Link to your troubleshooting guide PDF on Google Drive
     "HELP_GUIDE_URL":      "https://drive.google.com/file/d/1eIGXutbVxOULDnwBBLKfUlvOhI9k0Zly/view?usp=sharing",
@@ -307,7 +316,6 @@ class DomainMonitor:
         spf = mail.get('spf', {})
         dmarc = mail.get('dmarc', {})
         dkim = mail.get('dkim', {})
-        ptr = mail.get('ptr', {})
 
         if mail:
             if not mx.get('status'):
@@ -325,9 +333,6 @@ class DomainMonitor:
             if not dkim.get('status'):
                 score += 30
                 reasons.append("DKIM missing")
-            if not ptr.get('status') and not ptr.get('skipped'):
-                score += 20
-                reasons.append("reverse DNS missing")
         else:
             score += 20
             reasons.append("email checks not available")
@@ -424,7 +429,9 @@ class DomainMonitor:
         for d, data in results.items():
             has_fail = False
             for cat in ['website', 'email']:
-                for check in data.get(cat, {}).values():
+                for key, check in data.get(cat, {}).items():
+                    if cat == 'email' and key == 'ptr':
+                        continue
                     if isinstance(check, dict) and not check.get('status', True):
                         has_fail = True
             bl = data.get('blacklist', {})
@@ -532,12 +539,12 @@ class DomainMonitor:
                         ("PTR (Reverse DNS)", "ptr")
                     ]:
                         m = mail.get(key, {})
-                        status = "SKIP" if m.get('skipped') else ("YES" if m.get('status') else "NO")
+                        status = "SKIP" if m.get('skipped') else ("INFO" if key == "ptr" else ("YES" if m.get('status') else "NO"))
                         html += add_row(
                             label,
                             status,
                             m.get('details', 'N/A'),
-                            not m.get('status') and not m.get('skipped')
+                            key != "ptr" and not m.get('status') and not m.get('skipped')
                         )
 
                 if bl:
@@ -608,9 +615,9 @@ class DomainMonitor:
                                        ("DMARC Record", "dmarc"), ("DKIM Record", "dkim"),
                                        ("PTR (Reverse DNS)", "ptr")]:
                         m = mail.get(key, {})
-                        status = "SKIP" if m.get('skipped') else ("YES" if m.get('status') else "NO")
+                        status = "SKIP" if m.get('skipped') else ("INFO" if key == "ptr" else ("YES" if m.get('status') else "NO"))
                         html += add_row(label, status, m.get('details', 'N/A'),
-                                        not m.get('status') and not m.get('skipped'))
+                                        key != "ptr" and not m.get('status') and not m.get('skipped'))
 
                 if bl:
                     for label, info in [("IP Blacklisted", bl.get('ip', {})),
@@ -782,8 +789,8 @@ def domain_monitor_http(request):
     issues = sum(
         1 for d in results.values()
         for cat in ['website', 'email']
-        for chk in d.get(cat, {}).values()
-        if isinstance(chk, dict) and not chk.get('status', True)
+        for key, chk in d.get(cat, {}).items()
+        if not (cat == 'email' and key == 'ptr') and isinstance(chk, dict) and not chk.get('status', True)
     )
 
     return {

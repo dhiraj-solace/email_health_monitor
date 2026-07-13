@@ -18,7 +18,10 @@ CONFIG = {
     'MAX_WORKERS': int(os.getenv('MAX_WORKERS', 10)),
     'DKIM_SELECTORS': [
         selector.strip()
-        for selector in os.getenv('DKIM_SELECTORS', 'selector1,selector2,google,default,hostingermail1,hostingermail2').split(',')
+        for selector in os.getenv(
+            'DKIM_SELECTORS',
+            'selector1,selector2,google,default,hostingermail1,hostingermail2,hostingermail-a,hostingermail-b'
+        ).split(',')
         if selector.strip()
     ]
 }
@@ -32,7 +35,6 @@ BLACKLIST_IP = {
     'SORBS_SMTP': 'smtp.dnsbl.sorbs.net',
     'SORBS_HTTP': 'http.dnsbl.sorbs.net',
     'SORBS_MISC': 'misc.dnsbl.sorbs.net',
-    'UCEPROTECT': 'dnsbl.uceprotect.net',
     'DNSWL': 'list.dnswl.org',
     'SENDERSCORE': 'bl.senderscore.net',
     'PSBL': 'psbl.surriel.com',
